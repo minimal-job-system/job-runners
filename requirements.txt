@@ -1,0 +1,5 @@
+luigi==2.7.1
+Pillow==5.0.0
+python-daemon==2.1.2
+requests==2.18.4
+six==1.11.0
