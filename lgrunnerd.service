@@ -9,8 +9,8 @@ PIDFile=/var/run/lgrunnerd/lgrunnerd.pid
 ExecStart=/usr/local/bin/lgrunnerd.py
 ExecStop=/bin/kill -TERM $MAINPID
 Restart=on-failure
-User=viscdari
-Group=viscdari
+User={user}
+Group={group}
 
 [Install]
 WantedBy=multi-user.target
