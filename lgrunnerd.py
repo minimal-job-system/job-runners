@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 import daemon
 from daemon import pidfile
@@ -166,6 +166,12 @@ class WorkflowRunner():
 
                 time.sleep(2)
             except BaseException as ex:
+                if isinstance(ex, requests.exceptions.ConnectionError):
+                    self.logger.warning(
+                        "connecting to '%s': FAILED" % ex.request.url
+                    )
+                    continue
+
                 self.logger.error(ex, exc_info=True)
                 self.stop()
 
@@ -184,6 +190,7 @@ if __name__ == "__main__":
         working_directory="/var/lib/lgrunnerd",
         umask=0o002,
         pidfile=pidfile.TimeoutPIDLockFile(config['daemon']['pid_file']),
+        detach_process=True,
         stdout=open(config['daemon']['log_file'], "wb"),
         stderr=open(config['daemon']['log_file'], "wb"),
     ) as context:

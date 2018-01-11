@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 #
 # lgrunnerd      Startup script for lgrunnerd
 #
@@ -24,7 +24,7 @@ fi
 
 lgrunnerd=/usr/local/bin/lgrunnerd.py
 prog=lgrunnerd
-pidfile=${PIDFILE-/var/run/user/{user_id}/lgrunnerd/lgrunnerd.pid}
+pidfile=${PIDFILE-/var/run/lgrunnerd/lgrunnerd.pid}
 logfile=${LOGFILE-/var/log/lgrunnerd/lgrunnerd.log}
 RETVAL=0
 
