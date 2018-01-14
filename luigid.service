@@ -1,0 +1,12 @@
+[Unit]
+Description=Python-based daemon for centralized scheduling of luigi tasks
+After=syslog.target network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/luigid --logdir /var/log/luigid --state-path /var/lib/luigid/luigid.state
+User={user}
+Group={group}
+
+[Install]
+WantedBy=multi-user.target

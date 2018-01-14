@@ -17,18 +17,23 @@ import time
 
 
 class WorkflowRunner():
-    def __init__(self, log_file, luigid_conf={}, jobsystem_conf={}):
+    def __init__(self, lgrunnerd_conf={}, luigid_conf={}, jobsystem_conf={}):
         self.logger = logging.getLogger('lgrunnerd')
         self.logger.setLevel(logging.INFO)
-
-        fh = logging.FileHandler(log_file)
-        fh.setLevel(logging.INFO)
 
         formatstr = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         formatter = logging.Formatter(formatstr)
 
+        fh = logging.FileHandler(lgrunnerd_conf["log_file"])
+        fh.setLevel(logging.INFO)
         fh.setFormatter(formatter)
         self.logger.addHandler(fh)
+
+        if lgrunnerd_conf['background'].lower() != "true":
+            sh = logging.StreamHandler(sys.stdout)
+            sh.setLevel(logging.INFO)
+            sh.setFormatter(formatter)
+            self.logger.addHandler(sh)
 
         self.is_running = True
 
@@ -201,18 +206,23 @@ class WorkflowRunner():
         self.is_running = False
 
 
+def main(config):
+    workflow_runner = WorkflowRunner(
+        config['lgrunnerd'], config['luigid'], config['jobsystem']
+    )
+    signal.signal(signal.SIGINT, workflow_runner.stop)
+    signal.signal(signal.SIGTERM, workflow_runner.stop)
+    workflow_runner.start()
+
+
 if __name__ == "__main__":
     config = configparser.ConfigParser()
     config.read('/etc/lgrunner.d/lgrunnerd.conf')
 
-    workflow_runner = WorkflowRunner(
-        config['lgrunnerd']['log_file'],
-        config['luigid'], config['jobsystem']
-    )
+    if "--background" in sys.argv:
+        config['lgrunnerd']['background'] = "True"
 
-    signal.signal(signal.SIGTERM, workflow_runner.stop)
-
-    if config['lgrunnerd']['background']:
+    if config['lgrunnerd']['background'].lower() == "true":
         with daemon.DaemonContext(
             working_directory="/",
             umask=0o002,
@@ -223,8 +233,8 @@ if __name__ == "__main__":
             stdout=open(config['lgrunnerd']['log_file'], "a"),
             stderr=open(config['lgrunnerd']['log_file'], "a"),
         ) as context:
-            workflow_runner.start()
+            main(config)
     else:
-        workflow_runner.start()
+        main(config)
 
     sys.exit(0)

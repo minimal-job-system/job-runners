@@ -28,7 +28,7 @@ pidfile=${PIDFILE-/var/run/lgrunnerd/lgrunnerd.pid}
 logfile=${LOGFILE-/var/log/lgrunnerd/lgrunnerd.log}
 RETVAL=0
 
-OPTIONS=""
+OPTIONS="--background"
 
 start() {
         echo -n $"Starting $prog: "
@@ -42,7 +42,7 @@ start() {
                 return 0
             fi
         fi
-        python3 $lgrunnerd $OPTIONS
+        $lgrunnerd $OPTIONS
         RETVAL=$?
         [ $RETVAL = 0 ] && success || failure
         echo

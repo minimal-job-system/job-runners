@@ -1,13 +1,10 @@
 [Unit]
 Description=Python-based daemon for processing luigi tasks from a job system
-After=syslog.target network.target remote-fs.target nss-lookup.target
+After=syslog.target network.target luigid.service
 
 [Service]
-Type=forking
-EnvironmentFile=-/etc/sysconfig/lgrunnerd
-PIDFile=/var/run/lgrunnerd/lgrunnerd.pid
+Type=simple
 ExecStart=/usr/local/bin/lgrunnerd.py
-ExecStop=/bin/kill -TERM $MAINPID
 User={user}
 Group={group}
 
