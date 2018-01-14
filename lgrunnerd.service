@@ -8,7 +8,6 @@ EnvironmentFile=-/etc/sysconfig/lgrunnerd
 PIDFile=/var/run/lgrunnerd/lgrunnerd.pid
 ExecStart=/usr/local/bin/lgrunnerd.py
 ExecStop=/bin/kill -TERM $MAINPID
-Restart=on-failure
 User={user}
 Group={group}
 

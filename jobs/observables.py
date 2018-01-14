@@ -31,6 +31,7 @@ class ObservableJobSystemWorkflow(Observable, luigi.WrapperTask):
     Luigi workflow task which automatically registers a
     JobSystemUpdater observer.
     """
+    job_system_url = luigi.Parameter(default="http://localhost:8000")
     job_id = luigi.IntParameter(default=0)
 
     def __init__(self, *args, **kwargs):
@@ -41,6 +42,7 @@ class ObservableJobSystemWorkflow(Observable, luigi.WrapperTask):
     def notify_observers(self, *args, **kwargs):
         for key in kwargs:
             kwargs[key] = kwargs[key]
+        kwargs["job_system_url"] = self.job_system_url
         kwargs["job_id"] = self.job_id
         super(ObservableJobSystemWorkflow, self).notify_observers(
             *args, **kwargs

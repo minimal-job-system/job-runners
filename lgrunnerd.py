@@ -17,7 +17,7 @@ import time
 
 
 class WorkflowRunner():
-    def __init__(self, log_file, scheduler_conf={}, jobsys_config={}):
+    def __init__(self, log_file, luigid_conf={}, jobsystem_conf={}):
         self.logger = logging.getLogger('lgrunnerd')
         self.logger.setLevel(logging.INFO)
 
@@ -34,33 +34,33 @@ class WorkflowRunner():
 
         self.logger.info("lgrunnerd: initializing")
 
-        self.scheduler_config = {
+        self.luigid_config = {
             "use_central_scheduler":
-                scheduler_conf["use_central_scheduler"] or True,
-            "workers": scheduler_conf["workers"] or 2,
-            "host": scheduler_conf["host"] or "localhost",
-            "port": scheduler_conf["port"] or 8082
+                luigid_conf["use_central_scheduler"] or True,
+            "workers": luigid_conf["workers"] or 2,
+            "host": luigid_conf["host"] or "localhost",
+            "port": luigid_conf["port"] or 8082
         }
 
-        if (self.scheduler_config["use_central_scheduler"].lower() == "true"):
+        if (self.luigid_config["use_central_scheduler"].lower() == "true"):
             self.scheduler_parameters = [
-                '--scheduler-host', self.scheduler_config["host"],
-                '--scheduler-port', str(self.scheduler_config["port"])
+                '--scheduler-host', self.luigid_config["host"],
+                '--scheduler-port', str(self.luigid_config["port"])
             ]
         else:
             self.scheduler_parameters = ['--local-scheduler']
 
-        self.jobsys_config = {
-            "host": jobsys_config["host"] or "localhost",
-            "port": jobsys_config["port"] or 8000
+        self.jobsystem_conf = {
+            "host": jobsystem_conf["host"] or "localhost",
+            "port": jobsystem_conf["port"] or 8000
         }
 
         self.job_system_url = "http://%s:%s" % (
-            self.jobsys_config["host"], self.jobsys_config["port"]
+            self.jobsystem_conf["host"], self.jobsystem_conf["port"]
         )
 
-        sys.path.append(jobsys_config["module_path"])
-        for module in glob.iglob(jobsys_config["module_path"] + '/*.py'):
+        sys.path.append(jobsystem_conf["module_path"])
+        for module in glob.iglob(jobsystem_conf["module_path"] + '/*.py'):
             if module.endswith("__init__.py"):
                 continue
             self.logger.info(
@@ -70,10 +70,10 @@ class WorkflowRunner():
 
         self.logger.info("lgrunnerd: initialized")
         self.logger.info("----------------------")
-        self.logger.info("configuration: scheduler")
-        self.logger.info("    %s" % self.scheduler_config)
+        self.logger.info("configuration: luigi daemon")
+        self.logger.info("    %s" % self.luigid_config)
         self.logger.info("configuration: job system")
-        self.logger.info("    %s" % self.jobsys_config)
+        self.logger.info("    %s" % self.jobsystem_conf)
         self.logger.info("----------------------")
 
     def start(self):
@@ -112,7 +112,10 @@ class WorkflowRunner():
                         job["namespace"],
                         job["name"]
                     )
-                    workflow_params = ["--job-id", str(job["id"])]
+                    workflow_params = [
+                        "--job-system-url", self.job_system_url,
+                        "--job-id", str(job["id"])
+                    ]
                     for param in job["parameters"]:
                         param_name = param["name"].replace('_', '-')
 
@@ -139,7 +142,7 @@ class WorkflowRunner():
                     run_success = luigi.run(
                         [workflow_name] + workflow_params +
                         [
-                         '--workers', str(self.scheduler_config['workers']),
+                         '--workers', str(self.luigid_config['workers']),
                          '--parallel-scheduling',
                          '--no-lock',
                          '--logging-conf-file', "/etc/lgrunner.d/luigi.conf"] +
@@ -166,10 +169,26 @@ class WorkflowRunner():
 
                 time.sleep(2)
             except BaseException as ex:
-                if isinstance(ex, requests.exceptions.ConnectionError):
-                    self.logger.warning(
-                        "connecting to '%s': FAILED" % ex.request.url
-                    )
+                if isinstance(ex, requests.exceptions.RequestException):
+                    if isinstance(ex, requests.exceptions.ConnectionError):
+                        self.logger.warning(
+                            "could not connect to url '%s'!" % ex.request.url
+                        )
+                    elif isinstance(ex, requests.exceptions.HTTPError):
+                        self.logger.warning(
+                            "unexpected response for url '%s': [%s] %s!" % (
+                                ex.request.url, ex.response.status_code,
+                                ex.response.reason
+                            )
+                        )
+                    else:
+                        self.logger.warning(
+                            "unexpected error while calling url '%s'!" % (
+                                ex.request.url
+                            )
+                        )
+
+                    time.sleep(10)
                     continue
 
                 self.logger.error(ex, exc_info=True)
@@ -186,20 +205,26 @@ if __name__ == "__main__":
     config = configparser.ConfigParser()
     config.read('/etc/lgrunner.d/lgrunnerd.conf')
 
-    with daemon.DaemonContext(
-        working_directory="/var/lib/lgrunnerd",
-        umask=0o002,
-        pidfile=pidfile.TimeoutPIDLockFile(config['daemon']['pid_file']),
-        detach_process=True,
-        stdout=open(config['daemon']['log_file'], "wb"),
-        stderr=open(config['daemon']['log_file'], "wb"),
-    ) as context:
-        workflow_runner = WorkflowRunner(
-            config['daemon']['log_file'],
-            config['scheduler'], config['job_system']
-        )
+    workflow_runner = WorkflowRunner(
+        config['lgrunnerd']['log_file'],
+        config['luigid'], config['jobsystem']
+    )
 
-        signal.signal(signal.SIGTERM, workflow_runner.stop)
+    signal.signal(signal.SIGTERM, workflow_runner.stop)
+
+    if config['lgrunnerd']['background']:
+        with daemon.DaemonContext(
+            working_directory="/",
+            umask=0o002,
+            pidfile=pidfile.TimeoutPIDLockFile(
+                config['lgrunnerd']['pid_file']
+            ),
+            detach_process=True,
+            stdout=open(config['lgrunnerd']['log_file'], "a"),
+            stderr=open(config['lgrunnerd']['log_file'], "a"),
+        ) as context:
+            workflow_runner.start()
+    else:
         workflow_runner.start()
 
     sys.exit(0)

@@ -11,12 +11,13 @@ The workflow itself is given as follows:
 
 import abc
 from datetime import datetime, timedelta, time
+import functools
 import glob
 import logging
 import luigi
 import os
 from pathlib import Path
-from PIL import Image  # TODO: remove
+from PIL import Image
 import re
 import requests
 import sys
@@ -24,6 +25,21 @@ import sys
 from base_workflows import JobSystemWorkflow, ObservableJobSystemWorkflow
 
 
+# Helper Functions
+def _notify_observers_alias(obj, *args, **kwargs):
+    """
+    Alias for notify_observers method that allows the method to be called in a
+    multiprocessing pool.
+    Note: multiprocessing pickles objects for inter-process communication.
+          Unfortunatelly, Python2's pickle package does not support pickling of
+          instance methods which have to be wrapped in an alias method.
+          The support was added in Python3.
+    """
+    obj.notify_observers(*args, **kwargs)
+    return
+
+
+# Workflow Definition
 class FileListTask(luigi.Task):
     task_namespace = 'demo'
 
@@ -104,24 +120,10 @@ class ImageCompressionTask(luigi.Task):
 
                     try:
                         image = Image.open(file_path)
-                        # if image.mode == "I;16":
-                        if True:
-                            image.save(
-                                self.search_path + "/TIFF/" + file_name,
-                                compression="tiff_lzw"
-                            )
-                        else:
-                            raise RuntimeError(
-                                "Unexpected image format found for '%s'!" % (
-                                    file_name
-                                )
-                            )
-                        # image = cv2.imread(file_path, cv2.IMREAD_UNCHANGED)
-                        # cv2.imwrite(
-                        #     # compress the image with LZW by default
-                        #     self.search_path + "/TIFF/" + file_name,
-                        #     np.uint16(image)
-                        # )
+                        image.save(
+                            self.search_path + "/TIFF/" + file_name,
+                            compression="tiff_lzw"
+                        )
                         compr_file_list.write(
                             self.search_path + "/TIFF/" + file_name + "\n"
                         )
@@ -158,7 +160,9 @@ class ImageCompressionWorkflow(ObservableJobSystemWorkflow):
         task = ImageCompressionTask(self.search_path, self.recursive)
         # add the JobSystemWorkflow.notify_observers() method to
         # the ImageCompressionTask object
-        task.notify_observers = self.notify_observers.__get__(task)
+        task.notify_observers = functools.partial(
+            _notify_observers_alias, self
+        )
         return [task]
 
     def run(self):
