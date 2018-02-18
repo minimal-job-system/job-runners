@@ -4,7 +4,7 @@ import daemon
 from daemon import pidfile
 
 import configparser
-# import dateutili
+# import dateutil
 import glob
 import importlib
 import logging
@@ -16,7 +16,7 @@ import sys
 import time
 
 
-class WorkflowRunner():
+class WorkflowRunner(object):
     def __init__(self, lgrunnerd_conf={}, luigid_conf={}, jobsystem_conf={}):
         self.logger = logging.getLogger('lgrunnerd')
         self.logger.setLevel(logging.INFO)
@@ -35,7 +35,7 @@ class WorkflowRunner():
             sh.setFormatter(formatter)
             self.logger.addHandler(sh)
 
-        self.is_running = True
+        self.is_running = False
 
         self.logger.info("lgrunnerd: initializing")
 
@@ -81,8 +81,7 @@ class WorkflowRunner():
         self.logger.info("    %s" % self.jobsystem_conf)
         self.logger.info("----------------------")
 
-    def start(self):
-        self.logger.info("lgrunnerd: starting")
+    def run(self):
         while self.is_running:
             try:
                 # request unprocessed luigi-workflow jobs
@@ -109,7 +108,7 @@ class WorkflowRunner():
                         "%s/api/jobs/%s/" % (self.job_system_url, job["id"]),
                         json=job
                     )
-
+                    
                     start_time = time.time()
 
                     # setup luigi parameters
@@ -117,10 +116,15 @@ class WorkflowRunner():
                         job["namespace"],
                         job["name"]
                     )
-                    workflow_params = [
-                        "--job-system-url", self.job_system_url,
-                        "--job-id", str(job["id"])
+                    global_params = [
+                        "--GlobalLuigiParams-workers",
+                        str(self.luigid_config['workers']),
+                        "--GlobalTrackingParams-tracking-url",
+                        self.job_system_url,
+                        "--GlobalTrackingParams-tracking-id",
+                        str(job["id"]),
                     ]
+                    workflow_params = []
                     for param in job["parameters"]:
                         param_name = param["name"].replace('_', '-')
 
@@ -145,7 +149,7 @@ class WorkflowRunner():
                     )
                     self.logger.info("    parameters: %s" % workflow_params)
                     run_success = luigi.run(
-                        [workflow_name] + workflow_params +
+                        [workflow_name] + workflow_params + global_params +
                         [
                          '--workers', str(self.luigid_config['workers']),
                          '--parallel-scheduling',
@@ -165,6 +169,7 @@ class WorkflowRunner():
 
                     # update job status
                     job["status"] = "completed" if run_success else "failed"
+                    job["progress"] = 100
                     # job["duration"] = end_time - start_time
                     # job["exit_code"] = exit_code
                     requests.put(
@@ -201,6 +206,12 @@ class WorkflowRunner():
 
         self.logger.info("lgrunnerd: terminated")
 
+    def start(self):
+        self.logger.info("lgrunnerd: starting")
+        self.is_running = True
+        self.run()
+        
+
     def stop(self, signum=signal.SIGTERM, stack=None):
         self.logger.info("lgrunnerd: stopping")
         self.is_running = False
@@ -213,7 +224,6 @@ def main(config):
     signal.signal(signal.SIGINT, workflow_runner.stop)
     signal.signal(signal.SIGTERM, workflow_runner.stop)
     workflow_runner.start()
-
 
 if __name__ == "__main__":
     config = configparser.ConfigParser()
