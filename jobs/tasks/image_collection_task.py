@@ -22,7 +22,7 @@ class ImageCollectonTask(luigi.Task):
     """
     regex to identify image files to index.
     """
-    
+
     def requires(self):
         """
         Method which returns a list of tasks which have to exist before
@@ -40,7 +40,7 @@ class ImageCollectonTask(luigi.Task):
         for root, dirs, files in os.walk(self.source_path, topdown=True):
             if not self.recursive:
                 dirs = []  # stop recursion
-            
+
             for file_name in files:
                 file_path = os.path.join(root, file_name)
                 if re.match(self.regex, file_path):
@@ -51,7 +51,7 @@ class ImageCollectonTask(luigi.Task):
                         ),
                         ignore_index=True
                     )
-        
+
         with self.output().open('w') as fp:
             image_frame.to_csv(fp, sep='\t', encoding='utf-8')
 
@@ -64,5 +64,5 @@ class ImageCollectonTask(luigi.Task):
         out_path = os.path.join(self.source_path, "out")
         if not os.path.exists(out_path):
             os.mkdir(out_path)
-        
+
         return luigi.LocalTarget(os.path.join(out_path, "image_frame.csv"))

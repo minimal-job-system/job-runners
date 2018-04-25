@@ -64,6 +64,8 @@ class WorkflowRunner(object):
             self.jobsystem_conf["host"], self.jobsystem_conf["port"]
         )
 
+        self.register_event_handlers()
+
         sys.path.append(jobsystem_conf["module_path"])
         for module in glob.iglob(jobsystem_conf["module_path"] + '/*.py'):
             if module.endswith("__init__.py"):
@@ -80,6 +82,69 @@ class WorkflowRunner(object):
         self.logger.info("configuration: job system")
         self.logger.info("    %s" % self.jobsystem_conf)
         self.logger.info("----------------------")
+
+    def register_event_handlers(self):
+        @luigi.Task.event_handler("event.lgrunner.status.notification")
+        def on_status_notification(task, tracking_id, message):
+            """
+            User-defined callback function for status notifications.
+            """
+            response = requests.get(
+                "%s/api/jobs/?id=%s" % (self.job_system_url, tracking_id),
+                headers={'content-type': 'application/json'}
+            )
+            response.raise_for_status()
+
+            jobs = response.json()
+            if len(jobs) == 0:
+                raise Exception("No job found for id '%s'!" % tracking_id)
+            elif len(jobs) == 1:
+                job = jobs[0]
+
+                job["status"] = message
+
+                requests.put(
+                    "%s/api/jobs/%s/" % (self.job_system_url, tracking_id),
+                    json=job
+                )
+            else:
+                raise Exception(
+                    "Multiple jobs found for id '%s'!" % tracking_id
+                )
+
+        @luigi.Task.event_handler("event.lgrunner.progress.notification")
+        def on_progress_notification(task, tracking_id, notif_type, progress):
+            """
+            User-defined callback function for progress notifications.
+            """
+            response = requests.get(
+                "%s/api/jobs/?id=%s" % (self.job_system_url, tracking_id),
+                headers={'content-type': 'application/json'}
+            )
+            response.raise_for_status()
+
+            jobs = response.json()
+            if len(jobs) == 0:
+                raise Exception("No job found for id '%s'!" % tracking_id)
+            elif len(jobs) == 1:
+                job = jobs[0]
+
+                if job["status"] == "in progress":
+                    if notif_type == "set_progress":
+                        job["progress"] = progress
+                    if notif_type == "add_progress":
+                        job["progress"] += progress
+                    if notif_type == "sub_progress":
+                        job["progress"] -= progress
+
+                requests.put(
+                    "%s/api/jobs/%s/" % (self.job_system_url, tracking_id),
+                    json=job
+                )
+            else:
+                raise Exception(
+                    "Multiple jobs found for id '%s'!" % tracking_id
+                )
 
     def run(self):
         while self.is_running:
@@ -108,7 +173,7 @@ class WorkflowRunner(object):
                         "%s/api/jobs/%s/" % (self.job_system_url, job["id"]),
                         json=job
                     )
-                    
+
                     start_time = time.time()
 
                     # setup luigi parameters
@@ -117,10 +182,6 @@ class WorkflowRunner(object):
                         job["name"]
                     )
                     global_params = [
-                        "--GlobalLuigiParams-workers",
-                        str(self.luigid_config['workers']),
-                        "--GlobalTrackingParams-tracking-url",
-                        self.job_system_url,
                         "--GlobalTrackingParams-tracking-id",
                         str(job["id"]),
                     ]
@@ -210,7 +271,6 @@ class WorkflowRunner(object):
         self.logger.info("lgrunnerd: starting")
         self.is_running = True
         self.run()
-        
 
     def stop(self, signum=signal.SIGTERM, stack=None):
         self.logger.info("lgrunnerd: stopping")
@@ -224,6 +284,7 @@ def main(config):
     signal.signal(signal.SIGINT, workflow_runner.stop)
     signal.signal(signal.SIGTERM, workflow_runner.stop)
     workflow_runner.start()
+
 
 if __name__ == "__main__":
     config = configparser.ConfigParser()

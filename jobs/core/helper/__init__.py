@@ -1,2 +1,2 @@
-from parallel_helper import ParallelHelperClass
-from collection_helper import CollectionHelperClass
+from core.helper.parallel_helper import ParallelHelperClass
+from core.helper.collection_helper import CollectionHelperClass

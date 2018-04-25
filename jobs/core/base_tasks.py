@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 
 import luigi
-from global_params import GlobalTrackingParams
-from tracking_proxy import TrackingProxy
+from core.global_params import GlobalTrackingParams
 
 
 class TrackableTask(luigi.Task):
@@ -15,56 +14,33 @@ class TrackableTask(luigi.Task):
     """
     task's progress fraction with respect to the whole workflow (in percentage)
     """
-    
-    _tracking_proxy = TrackingProxy()
-    """
-    instance wide tracking proxy
-    """
-    
-    _tracking_proxy.daemon = True
-    # the tracking proxy runns until termination of the python application...
-    _tracking_proxy.start()
-    
-    def __init__(self, *args, **kwargs):
-        super(TrackableTask, self).__init__(*args, **kwargs)
-        # the _tracking_proxy has to be initialized on class level
-        # (not instance level) to be shared among all TrackableTasks.
-        # by using a single proxy, we omit race conditions.
-    
+
     def set_status(self, message):
-        if GlobalTrackingParams().tracking_url != "":
-            self._tracking_proxy.set_status(
-                GlobalTrackingParams().tracking_url,
-                GlobalTrackingParams().tracking_id,
-                message
-            )
+        self.trigger_event(
+            "event.lgrunner.status.notification",
+            self, GlobalTrackingParams().tracking_id, "set_status", message
+        )
 
-    def set_progress(self, percentage):
-        if GlobalTrackingParams().tracking_url != "":
-            self._tracking_proxy.set_progress(
-                GlobalTrackingParams().tracking_url,
-                GlobalTrackingParams().tracking_id,
-                percentage
-            )
+    def set_progress(self, progress):
+        self.trigger_event(
+            "event.lgrunner.progress.notification",
+            self, GlobalTrackingParams().tracking_id, "set_progress", progress
+        )
 
-    def add_progress(self, percentage):
-        if GlobalTrackingParams().tracking_url != "":
-            self._tracking_proxy.add_progress(
-                GlobalTrackingParams().tracking_url,
-                GlobalTrackingParams().tracking_id,
-                percentage
-            )
+    def add_progress(self, progress):
+        self.trigger_event(
+            "event.lgrunner.progress.notification",
+            self, GlobalTrackingParams().tracking_id, "add_progress", progress
+        )
 
-    def sub_progress(self, percentage):
-        if GlobalTrackingParams().tracking_url != "":
-            self._tracking_proxy.sub_progress(
-                GlobalTrackingParams().tracking_url,
-                GlobalTrackingParams().tracking_id,
-                percentage
-            )
+    def sub_progress(self, progress):
+        self.trigger_event(
+            "event.lgrunner.progress.notification",
+            self, GlobalTrackingParams().tracking_id, "sub_progress", progress
+        )
 
 
-class JobSystemWorkflow(luigi.WrapperTask):
+class JobSystemWorkflow(luigi.Task):
     """
     Default luigi workflow task.
     """

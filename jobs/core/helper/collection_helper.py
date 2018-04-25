@@ -2,11 +2,12 @@ import luigi
 import os
 import re
 
+
 class CollectionHelperClass(object):
     """
     Helper class with functions for collecting data.
     """
-    
+
     def data_path(self, search_path):
         """
         Searches for the data directory containing all relevant raw data to
@@ -29,7 +30,7 @@ class CollectionHelperClass(object):
             if os.path.isdir(folder_path):
                 if re.compile(r"^\d{6}\w{2}\w{3}").match(folder_name):
                     data_paths.append(folder_path)
-        
+
         data_path = None
         if len(data_paths) == 0:
             raise RuntimeError(
@@ -45,25 +46,35 @@ class CollectionHelperClass(object):
                     % search_path
                 )
 
+            sf_roi_data_path = None
+            sf_raw_data_path = None
             if (
                 os.path.getmtime(data_paths[0]) >
                 os.path.getmtime(data_paths[1])
             ):
-                data_path = data_paths[0]
+                sf_roi_data_path = data_paths[1]
+                sf_raw_data_path = data_paths[0]
             else:
-                data_path = data_paths[1]
+                sf_roi_data_path = data_paths[0]
+                sf_raw_data_path = data_paths[1]
 
-            data_path_sizes = [
-                sum(os.path.getsize(f) for f in os.listdir(data_paths[0])
-                if os.path.isfile(f)),
-                sum(os.path.getsize(f) for f in os.listdir(data_paths[1])
-                if os.path.isfile(f))
-            ]
-            if data_path_sizes[0] < data_path_sizes[1]:
+            sf_roi_data_size = sum(
+                os.path.getsize(os.path.join(sf_roi_data_path, f))
+                for f in os.listdir(sf_roi_data_path)
+                if os.path.isfile(os.path.join(sf_roi_data_path, f))
+            )
+            sf_raw_data_size = sum(
+                os.path.getsize(os.path.join(sf_raw_data_path, f))
+                for f in os.listdir(sf_raw_data_path)
+                if os.path.isfile(os.path.join(sf_raw_data_path, f))
+            )
+
+            if sf_raw_data_size < sf_roi_data_size:
                 raise RuntimeError(
                     "Found unexpected SF folder structure in '%s'!"
                     % search_path
                 )
+            data_path = sf_raw_data_path
         else:
             raise RuntimeError(
                 "Multiple non-SF data folders found for directory '%s'!"

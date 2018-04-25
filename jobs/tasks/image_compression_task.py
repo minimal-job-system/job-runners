@@ -28,7 +28,7 @@ class ImageCompressionTask(TrackableTask, ParallelHelperClass):
     """
     ID of the worker which process the current task junk.
     """
-    
+
     def requires(self):
         """
         Method which returns a list of tasks which have to exist before
@@ -47,7 +47,7 @@ class ImageCompressionTask(TrackableTask, ParallelHelperClass):
         res_path = os.path.join(self.source_path, "res")
         if not os.path.exists(res_path):
             os.makedirs(res_path)
-        
+
         # gather data
         with self.input().open('r') as fp:
             image_frame = pd.read_csv(fp, sep='\t', encoding='utf-8')
@@ -55,13 +55,13 @@ class ImageCompressionTask(TrackableTask, ParallelHelperClass):
             image_frame.index, GlobalLuigiParams().workers
         )
         worker_image_ids = list(image_id_partitions)[self.worker_id]
-        
+
         processed_files = 0
         total_files = len(worker_image_ids)
         progress_fraction_per_file = (
             float(self.progress_fraction)/total_files if total_files > 0 else 0
         )
-        
+
         compr_image_frame = pd.DataFrame(columns=["file_path"])
         for image_id in worker_image_ids:
             file_path = image_frame.loc[image_id]["file_path"]
@@ -87,18 +87,18 @@ class ImageCompressionTask(TrackableTask, ParallelHelperClass):
             except Exception as ex:
                 logging.getLogger('luigi-interface').error(ex)
                 continue
-        
+
             processed_files += 1
             if processed_files % 100 == 0:
                 self.add_progress(progress_fraction_per_file * 100)
-        
+
         if total_files > 0:
             self.add_progress(
                 progress_fraction_per_file * (processed_files % 100)
             )
         else:
             self.add_progress(self.progress_fraction)
-        
+
         with self.output().open('w') as fp:
             compr_image_frame.to_csv(fp, sep='\t', encoding='utf-8')
 
@@ -111,7 +111,7 @@ class ImageCompressionTask(TrackableTask, ParallelHelperClass):
         out_path = os.path.join(self.source_path, "out")
         if not os.path.exists(out_path):
             os.mkdir(out_path)
-        
+
         return luigi.LocalTarget(
             os.path.join(
                 out_path, "compr_image_frame_by_worker_%s.csv" % self.worker_id

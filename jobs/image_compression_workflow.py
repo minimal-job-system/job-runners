@@ -48,7 +48,7 @@ class ImageCompressionWorkflow(JobSystemWorkflow, TrackableTask):
     """
     indicates wherever to search recursively for image files.
     """
-    
+
     def requires(self):
         for worker_id in range(GlobalLuigiParams().workers):
             yield ImageCompressionTask(
