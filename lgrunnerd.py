@@ -5,6 +5,7 @@ from daemon import pidfile
 
 import configparser
 # import dateutil
+import datetime
 import glob
 import importlib
 import logging
@@ -140,6 +141,37 @@ class WorkflowRunner(object):
                 requests.put(
                     "%s/api/jobs/%s/" % (self.job_system_url, tracking_id),
                     json=job
+                )
+            else:
+                raise Exception(
+                    "Multiple jobs found for id '%s'!" % tracking_id
+                )
+
+        @luigi.Task.event_handler("event.lgrunner.log.notification")
+        def on_log_notification(task, tracking_id, level, message):
+            """
+            User-defined callback function for log notifications.
+            """
+            print("a")
+            response = requests.get(
+                "%s/api/jobs/?id=%s" % (self.job_system_url, tracking_id),
+                headers={'content-type': 'application/json'}
+            )
+            response.raise_for_status()
+
+            jobs = response.json()
+            if len(jobs) == 0:
+                raise Exception("No job found for id '%s'!" % tracking_id)
+            elif len(jobs) == 1:
+                log_event = {
+                    "level": level,
+                    "message": message,
+                    "date_created": datetime.datetime.now().isoformat()
+                }
+                print(log_event)
+                res = requests.post(
+                    "%s/api/jobs/%s/logs/" % (self.job_system_url, tracking_id),
+                    json=log_event
                 )
             else:
                 raise Exception(
