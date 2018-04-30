@@ -2,6 +2,7 @@ class ParallelHelperClass(object):
     """
     Helper class with functions for parallelization.
     """
+    #TODO: remove unused class
 
     def split_seq(self, seq, m):
         """

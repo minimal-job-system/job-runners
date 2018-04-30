@@ -7,7 +7,7 @@ Demo workflow for compressing image data located within a source folder.
 The workflow itself is given as follows:
 
                        /> ImageCompressionTask \>
-    ImageCollectonTask -> ImageCompressionTask -> ImageCompressionWorkflow
+    ImageCollectionTask -> ImageCompressionTask -> ImageCompressionWorkflow
                        \> ...                  />
 
 Output folders:
@@ -17,30 +17,23 @@ Output folders:
 
 import logging
 import luigi
+import os
+import pandas as pd
 
-from core.global_params import GlobalLuigiParams
-from core.base_tasks import JobSystemWorkflow, TrackableTask
+from core.base_tasks import JobSystemWorkflow
 
+from tasks.image_collection_task import ImageCollectionTask
 from tasks.image_compression_task import ImageCompressionTask
 
 
-# Event Handler
-@luigi.Task.event_handler(luigi.Event.FAILURE)
-def on_failure(task, exception):
-    """Will be called directly after a failed execution
-       of `run` on any Task subclass (i.e. all luigi Tasks)
-    """
-    TrackableTask().set_status("failed")
-
-
 # Workflow Definition
-class ImageCompressionWorkflow(JobSystemWorkflow, TrackableTask):
+class ImageCompressionWorkflow(JobSystemWorkflow):
     """
     Workflow for compressing images.
     """
     task_namespace = 'demo'
 
-    source_path = luigi.Parameter(default="")
+    source_path = luigi.Parameter()
     """
     source path containing all images to compress.
     """
@@ -50,9 +43,26 @@ class ImageCompressionWorkflow(JobSystemWorkflow, TrackableTask):
     """
 
     def requires(self):
-        for worker_id in range(GlobalLuigiParams().workers):
-            yield ImageCompressionTask(
-                source_path=self.source_path, recursive=self.recursive,
-                worker_id=worker_id,
-                progress_fraction=100.0/GlobalLuigiParams().workers
+        pass
+
+    def run(self):
+        image_collection_target = yield ImageCollectionTask(
+            source_path=self.source_path,
+            recursive=self.recursive
+        )
+
+        with image_collection_target.open('r') as fp:
+            image_frame = pd.read_csv(fp, sep='\t', encoding='utf-8')
+        group_ids= image_frame["group_id"].unique()
+
+        image_compression_task_list = []
+        for group_id in group_ids:
+            image_compression_task_list.append(
+                ImageCompressionTask(
+                    source_path=self.source_path,
+                    recursive=self.recursive,
+                    group_id=group_id,
+                    progress_fraction=100.0 / len(group_ids)
+                )
             )
+        yield image_compression_task_list

@@ -6,8 +6,10 @@ import os
 import pandas as pd
 import re
 
+from core.base_tasks import JobSystemTask
 
-class ImageCollectonTask(luigi.Task):
+
+class ImageCollectionTask(JobSystemTask):
     task_namespace = 'demo'
 
     source_path = luigi.Parameter(default="")
@@ -36,18 +38,18 @@ class ImageCollectonTask(luigi.Task):
         """
         Main method.
         """
-        image_frame = pd.DataFrame(columns=["file_path"])
+        image_frame = pd.DataFrame(columns=["file_path", "group_id"])
         for root, dirs, files in os.walk(self.source_path, topdown=True):
             if not self.recursive:
                 dirs = []  # stop recursion
 
-            for file_name in files:
+            for idx, file_name in enumerate(files):
                 file_path = os.path.join(root, file_name)
                 if re.match(self.regex, file_path):
                     image_frame = image_frame.append(
                         pd.DataFrame(
-                            [(file_path,)],
-                            columns=["file_path"]
+                            [(file_path, idx%4)],
+                            columns=["file_path", "group_id"]
                         ),
                         ignore_index=True
                     )

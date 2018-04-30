@@ -17,6 +17,119 @@ import sys
 import time
 
 
+# helper functions
+def fetch_remote_job(job_system_url, job_id):
+    response = requests.get(
+        "%s/api/jobs/?id=%s" % (job_system_url, job_id),
+        headers={'content-type': 'application/json'}
+    )
+    response.raise_for_status()
+
+    jobs = response.json()
+    if len(jobs) == 0:
+        raise Exception("No job found for id '%s'!" % job_id)
+    elif len(jobs) == 1:
+        return jobs[0]
+    else:
+        raise Exception(
+            "Multiple jobs found for id '%s'!" % job_id
+        )
+
+
+# event handlers
+@luigi.Task.event_handler(luigi.Event.FAILURE)
+def on_failure(task, exception):
+    """Will be called directly after a failed execution
+       of `run` on any Task subclass (i.e. all luigi Tasks)
+    """
+    if not hasattr(task, 'tracking_url') or not hasattr(task, 'tracking_id'):
+        return  # non-trackable tasks cannot be updated via the job system
+
+    log_event = {
+        "level": logging.ERROR,
+        "message": str(exception),
+        "date_created": datetime.datetime.now().isoformat()
+    }
+    response = requests.post(
+        "%s/api/jobs/%s/logs/" % (task.tracking_url, task.tracking_id),
+        json=log_event
+    )
+    response.raise_for_status()
+
+    job = fetch_remote_job(task.tracking_url, task.tracking_id)
+    job["status"] = "failed"
+    response = requests.put(
+        "%s/api/jobs/%s/" % (task.tracking_url, task.tracking_id),
+        json=job
+    )
+    response.raise_for_status()
+
+
+@luigi.Task.event_handler("event.lgrunner.status.notification")
+def on_status_notification(task, message):
+    """
+    User-defined callback function for status notifications.
+    """
+    if not hasattr(task, 'tracking_url') or not hasattr(task, 'tracking_id'):
+        raise Exception(
+            "Non-trackable tasks cannot be updated via the job system"
+        )
+
+    job = fetch_remote_job(task.tracking_url, task.tracking_id)
+    job["status"] = message
+    response = requests.put(
+        "%s/api/jobs/%s/" % (task.tracking_url, task.tracking_id),
+        json=job
+    )
+    response.raise_for_status()
+
+
+@luigi.Task.event_handler("event.lgrunner.progress.notification")
+def on_progress_notification(task, notif_type, progress):
+    if not hasattr(task, 'tracking_url') or not hasattr(task, 'tracking_id'):
+        raise Exception(
+            "Non-trackable tasks cannot be updated via the job system"
+        )
+
+    job = fetch_remote_job(task.tracking_url, task.tracking_id)
+
+    if job["status"] == "in progress":
+        if notif_type == "set_progress":
+            job["progress"] = progress
+        if notif_type == "add_progress":
+            job["progress"] += progress
+        if notif_type == "sub_progress":
+            job["progress"] -= progress
+
+    response = requests.put(
+        "%s/api/jobs/%s/" % (task.tracking_url, task.tracking_id),
+        json=job
+    )
+    response.raise_for_status()
+
+
+@luigi.Task.event_handler("event.lgrunner.log.notification")
+def on_log_notification(task, level, message):
+    """
+    User-defined callback function for log notifications.
+    """
+    if not hasattr(task, 'tracking_url') or not hasattr(task, 'tracking_id'):
+        raise Exception(
+            "Non-trackable tasks cannot be updated via the job system"
+        )
+
+    log_event = {
+        "level": level,
+        "message": message,
+        "date_created": datetime.datetime.now().isoformat()
+    }
+    response = requests.post(
+        "%s/api/jobs/%s/logs/" % (task.tracking_url, task.tracking_id),
+        json=log_event
+    )
+    response.raise_for_status()
+
+
 class WorkflowRunner(object):
     def __init__(self, lgrunnerd_conf={}, luigid_conf={}, jobsystem_conf={}):
         self.logger = logging.getLogger('lgrunnerd')
@@ -65,8 +178,6 @@ class WorkflowRunner(object):
             self.jobsystem_conf["host"], self.jobsystem_conf["port"]
         )
 
-        self.register_event_handlers()
-
         sys.path.append(jobsystem_conf["module_path"])
         for module in glob.iglob(jobsystem_conf["module_path"] + '/*.py'):
             if module.endswith("__init__.py"):
@@ -83,100 +194,6 @@ class WorkflowRunner(object):
         self.logger.info("configuration: job system")
         self.logger.info("    %s" % self.jobsystem_conf)
         self.logger.info("----------------------")
-
-    def register_event_handlers(self):
-        @luigi.Task.event_handler("event.lgrunner.status.notification")
-        def on_status_notification(task, tracking_id, message):
-            """
-            User-defined callback function for status notifications.
-            """
-            response = requests.get(
-                "%s/api/jobs/?id=%s" % (self.job_system_url, tracking_id),
-                headers={'content-type': 'application/json'}
-            )
-            response.raise_for_status()
-
-            jobs = response.json()
-            if len(jobs) == 0:
-                raise Exception("No job found for id '%s'!" % tracking_id)
-            elif len(jobs) == 1:
-                job = jobs[0]
-
-                job["status"] = message
-
-                requests.put(
-                    "%s/api/jobs/%s/" % (self.job_system_url, tracking_id),
-                    json=job
-                )
-            else:
-                raise Exception(
-                    "Multiple jobs found for id '%s'!" % tracking_id
-                )
-
-        @luigi.Task.event_handler("event.lgrunner.progress.notification")
-        def on_progress_notification(task, tracking_id, notif_type, progress):
-            """
-            User-defined callback function for progress notifications.
-            """
-            response = requests.get(
-                "%s/api/jobs/?id=%s" % (self.job_system_url, tracking_id),
-                headers={'content-type': 'application/json'}
-            )
-            response.raise_for_status()
-
-            jobs = response.json()
-            if len(jobs) == 0:
-                raise Exception("No job found for id '%s'!" % tracking_id)
-            elif len(jobs) == 1:
-                job = jobs[0]
-
-                if job["status"] == "in progress":
-                    if notif_type == "set_progress":
-                        job["progress"] = progress
-                    if notif_type == "add_progress":
-                        job["progress"] += progress
-                    if notif_type == "sub_progress":
-                        job["progress"] -= progress
-
-                requests.put(
-                    "%s/api/jobs/%s/" % (self.job_system_url, tracking_id),
-                    json=job
-                )
-            else:
-                raise Exception(
-                    "Multiple jobs found for id '%s'!" % tracking_id
-                )
-
-        @luigi.Task.event_handler("event.lgrunner.log.notification")
-        def on_log_notification(task, tracking_id, level, message):
-            """
-            User-defined callback function for log notifications.
-            """
-            print("a")
-            response = requests.get(
-                "%s/api/jobs/?id=%s" % (self.job_system_url, tracking_id),
-                headers={'content-type': 'application/json'}
-            )
-            response.raise_for_status()
-
-            jobs = response.json()
-            if len(jobs) == 0:
-                raise Exception("No job found for id '%s'!" % tracking_id)
-            elif len(jobs) == 1:
-                log_event = {
-                    "level": level,
-                    "message": message,
-                    "date_created": datetime.datetime.now().isoformat()
-                }
-                print(log_event)
-                res = requests.post(
-                    "%s/api/jobs/%s/logs/" % (self.job_system_url, tracking_id),
-                    json=log_event
-                )
-            else:
-                raise Exception(
-                    "Multiple jobs found for id '%s'!" % tracking_id
-                )
 
     def run(self):
         while self.is_running:
@@ -214,6 +231,8 @@ class WorkflowRunner(object):
                         job["name"]
                     )
                     global_params = [
+                        "--GlobalTrackingParams-tracking-url",
+                         self.job_system_url,
                         "--GlobalTrackingParams-tracking-id",
                         str(job["id"]),
                     ]

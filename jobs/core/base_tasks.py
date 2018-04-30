@@ -7,7 +7,7 @@ from core.global_params import GlobalTrackingParams
 class TrackableTask(luigi.Task):
     """
     Trackable luigi task.
-    Wrapper class for updating a task's status and progress on an external
+    Wrapper class for updating remote task's status and progress on an external
     monitoring system.
     """
     progress_fraction = luigi.FloatParameter(default=0.0, significant=False)
@@ -15,32 +15,47 @@ class TrackableTask(luigi.Task):
     task's progress fraction with respect to the whole workflow (in percentage)
     """
 
+    @property
+    def tracking_id(self):
+        return GlobalTrackingParams().tracking_id
+    
+    @property
+    def tracking_url(self):
+        return GlobalTrackingParams().tracking_url
+
     def set_status(self, message):
-        self.trigger_event(
-            "event.lgrunner.status.notification",
-            self, GlobalTrackingParams().tracking_id, message
-        )
+        self.trigger_event("event.lgrunner.status.notification", self, message)
 
     def set_progress(self, progress):
         self.trigger_event(
             "event.lgrunner.progress.notification",
-            self, GlobalTrackingParams().tracking_id, "set_progress", progress
+            self, "set_progress", progress
         )
 
     def add_progress(self, progress):
         self.trigger_event(
             "event.lgrunner.progress.notification",
-            self, GlobalTrackingParams().tracking_id, "add_progress", progress
+            self, "add_progress", progress
         )
 
     def sub_progress(self, progress):
         self.trigger_event(
             "event.lgrunner.progress.notification",
-            self, GlobalTrackingParams().tracking_id, "sub_progress", progress
+            self, "sub_progress", progress
         )
 
 
-class JobSystemWorkflow(luigi.Task):
+class JobSystemTask(TrackableTask):
+    """
+    Default job system task.
+    """
+    def log(self, level, message):
+        self.trigger_event(
+            "event.lgrunner.log.notification", self, level, message
+        )
+
+
+class JobSystemWorkflow(TrackableTask):
     """
     Default job system workflow.
     """
@@ -54,14 +69,3 @@ class JobSystemWorkflow(luigi.Task):
             return False
 
         return all(map(lambda output: output.exists(), outputs))
-
-
-class JobSystemTask(luigi.Task):
-    """
-    Default job system task.
-    """
-    def log(self, level, message):
-        self.trigger_event(
-            "event.lgrunner.log.notification",
-            self, GlobalTrackingParams().tracking_id, level, message
-        )
