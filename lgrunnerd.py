@@ -178,14 +178,9 @@ class WorkflowRunner(object):
             self.jobsystem_conf["host"], self.jobsystem_conf["port"]
         )
 
-        sys.path.append(jobsystem_conf["module_path"])
-        for module in glob.iglob(jobsystem_conf["module_path"] + '/*.py'):
-            if module.endswith("__init__.py"):
-                continue
-            self.logger.info(
-                "loading module: %s" % os.path.basename(module)[:-3]
-            )
-            importlib.import_module(os.path.basename(module)[:-3])
+        for module in jobsystem_conf["import_modules"].split(','):
+            self.logger.info("    importing module: %s" % module)
+            importlib.import_module(module, package=None)
 
         self.logger.info("lgrunnerd: initialized")
         self.logger.info("----------------------")
