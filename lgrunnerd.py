@@ -227,7 +227,7 @@ class WorkflowRunner(object):
                     )
                     global_params = [
                         "--GlobalTrackingParams-tracking-url",
-                         self.job_system_url,
+                        self.job_system_url,
                         "--GlobalTrackingParams-tracking-id",
                         str(job["id"]),
                     ]
