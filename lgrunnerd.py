@@ -10,6 +10,8 @@ import glob
 import importlib
 import logging
 import luigi
+# from luigi.task_status import PENDING, FAILED, DONE, RUNNING, \
+# BATCH_RUNNING, UNKNOWN, DISABLED
 import os
 import requests
 import signal
@@ -37,6 +39,14 @@ def fetch_remote_job(job_system_url, job_id):
 
 
 # event handlers
+@luigi.Task.event_handler(luigi.Event.BROKEN_TASK)
+def on_broken_task(task, exception):
+    """Will be called directly after a broken dependency
+       of `require` on any Task subclass (i.e. all luigi Tasks)
+    """
+    on_failure(task, exception)
+
+
 @luigi.Task.event_handler(luigi.Event.FAILURE)
 def on_failure(task, exception):
     """Will be called directly after a failed execution
@@ -113,6 +123,11 @@ def on_log_notification(task, level, message):
     """
     User-defined callback function for log notifications.
     """
+    if level == logging.WARNING:
+        logging.getLogger('luigi').warning(message)
+    if level == logging.ERROR:
+        logging.getLogger('luigi').error(message)
+
     if not hasattr(task, 'tracking_url') or not hasattr(task, 'tracking_id'):
         raise Exception(
             "Non-trackable tasks cannot be updated via the job system"
@@ -162,12 +177,12 @@ class WorkflowRunner(object):
         }
 
         if (self.luigid_config["use_central_scheduler"].lower() == "true"):
-            self.scheduler_parameters = [
-                '--scheduler-host', self.luigid_config["host"],
-                '--scheduler-port', str(self.luigid_config["port"])
-            ]
+            self.scheduler_params = {
+                "scheduler_host": self.luigid_config["host"],
+                "scheduler_port": int(self.luigid_config["port"])
+            }
         else:
-            self.scheduler_parameters = ['--local-scheduler']
+            self.scheduler_params = {"local_scheduler": True}
 
         self.jobsystem_conf = {
             "host": jobsystem_conf["host"] or "localhost",
@@ -221,61 +236,86 @@ class WorkflowRunner(object):
                     start_time = time.time()
 
                     # setup luigi parameters
+                    config = luigi.configuration.get_config()
+                    config.set(
+                        'GlobalTrackingParams', 'tracking_url',
+                        self.job_system_url
+                    )
+                    config.set(
+                        'GlobalTrackingParams', 'tracking_id',
+                        str(job["id"])
+                    )
+
                     workflow_name = '%s.%s' % (
                         job["namespace"],
                         job["name"]
                     )
-                    global_params = [
-                        "--GlobalTrackingParams-tracking-url",
-                        self.job_system_url,
-                        "--GlobalTrackingParams-tracking-id",
-                        str(job["id"]),
-                    ]
-                    workflow_params = []
+                    workflow_params = {}
                     for param in job["parameters"]:
-                        param_name = param["name"].replace('_', '-')
-
                         if param["type"] == 0:  # integer
-                            workflow_params.append("--%s" % param_name)
-                            workflow_params.append(param["value"])
+                            workflow_params[param["name"]] = \
+                                int(param["value"])
                         if param["type"] == 1:  # float
-                            workflow_params.append("--%s" % param_name)
-                            workflow_params.append(param["value"])
+                            workflow_params[param["name"]] = \
+                                float(param["value"])
                         if param["type"] == 2:  # string
-                            workflow_params.append("--%s" % param_name)
-                            workflow_params.append(param["value"])
+                            workflow_params[param["name"]] = param["value"]
                         if param["type"] == 3:  # boolean
-                            if param["value"].lower() == "true":
-                                workflow_params.append("--%s" % param_name)
+                            workflow_params[param["name"]] = \
+                                param["value"].lower() == "true"
                         if param["type"] == 4:  # datetime
-                            workflow_params.append("--%s" % param_name)
-                            workflow_params.append(param["value"])
+                            workflow_params[param["name"]] = param["value"]
 
                     self.logger.info(
                         "running workflow '%s'..." % workflow_name
                     )
                     self.logger.info("    parameters: %s" % workflow_params)
-                    run_success = luigi.run(
-                        [workflow_name] + workflow_params + global_params +
-                        [
-                         '--workers', str(self.luigid_config['workers']),
-                         '--parallel-scheduling',
-                         '--no-lock',
-                         '--logging-conf-file', "/etc/lgrunner.d/luigi.conf"] +
-                        self.scheduler_parameters
+
+                    workflow_class = luigi.task_register.Register.get_task_cls(
+                        workflow_name
+                    )
+
+                    run_success = luigi.build(
+                        [workflow_class(**workflow_params)],
+                        workers=self.luigid_config['workers'],
+                        parallel_scheduling=True,
+                        no_lock=True,
+                        logging_conf_file="/etc/lgrunner.d/luigi.conf",
+                        **self.scheduler_params
                     )
 
                     end_time = time.time()
 
+                    # update job information
+                    job = fetch_remote_job(self.job_system_url, job['id'])
+
+                    no_warnings = len([
+                        entry for entry in job["log_entries"]
+                        if entry["level"] == 30
+                    ])
+                    no_errors = len([
+                        entry for entry in job["log_entries"]
+                        if entry["level"] == 40
+                    ])
+
                     self.logger.info(
-                        "    %s after %ss" % (
-                            "succeeded" if run_success else "failed",
-                            end_time - start_time
-                        )
+                        "    %s after %s",
+                        "succeeded" if run_success else "failed",
+                        end_time - start_time
                     )
 
                     # update job status
-                    job["status"] = "completed" if run_success else "failed"
+                    status = "completed" if run_success else "failed"
+                    if (no_errors > 0 or no_warnings > 0):
+                        status += " [%s]" % (','.join([
+                            "%s=%s" % (event, occurrences)
+                            for event, occurrences in (
+                                ("Errors", no_errors),
+                                ("Warnings", no_warnings)
+                            )
+                            if occurrences > 0
+                        ]))
+                    job["status"] = status
                     job["progress"] = 100
                     # job["duration"] = end_time - start_time
                     # job["exit_code"] = exit_code
