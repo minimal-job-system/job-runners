@@ -22,20 +22,12 @@ import time
 # helper functions
 def fetch_remote_job(job_system_url, job_id):
     response = requests.get(
-        "%s/api/jobs/?id=%s" % (job_system_url, job_id),
+        "%s/api/jobs/%s" % (job_system_url, job_id),
         headers={'content-type': 'application/json'}
     )
     response.raise_for_status()
 
-    jobs = response.json()
-    if len(jobs) == 0:
-        raise Exception("No job found for id '%s'!" % job_id)
-    elif len(jobs) == 1:
-        return jobs[0]
-    else:
-        raise Exception(
-            "Multiple jobs found for id '%s'!" % job_id
-        )
+    return response.json()
 
 
 # event handlers
