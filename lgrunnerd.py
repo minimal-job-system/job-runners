@@ -13,6 +13,7 @@ import luigi
 # from luigi.task_status import PENDING, FAILED, DONE, RUNNING, \
 # BATCH_RUNNING, UNKNOWN, DISABLED
 import os
+import psutil
 import requests
 import signal
 import sys
@@ -21,11 +22,18 @@ import time
 
 # helper functions
 def fetch_remote_job(job_system_url, job_id):
-    response = requests.get(
-        "%s/api/jobs/%s" % (job_system_url, job_id),
-        headers={'content-type': 'application/json'}
-    )
-    response.raise_for_status()
+    for retries in range(3):
+        try:
+            response = requests.get(
+                "%s/api/jobs/%s" % (job_system_url, job_id),
+                headers={'content-type': 'application/json'}
+            )
+            response.raise_for_status()
+            break
+        except Exception as ex:
+            pass
+    else:
+        raise ex
 
     return response.json()
 
@@ -138,7 +146,10 @@ def on_log_notification(task, level, message):
 
 
 class WorkflowRunner(object):
-    def __init__(self, lgrunnerd_conf={}, luigid_conf={}, jobsystem_conf={}):
+    def __init__(
+        self,
+        lgrunnerd_conf={}, luigid_conf={}, jobsystem_conf={}, luigi_conf={}
+    ):
         self.logger = logging.getLogger('lgrunnerd')
         self.logger.setLevel(logging.INFO)
 
@@ -185,9 +196,14 @@ class WorkflowRunner(object):
             self.jobsystem_conf["host"], self.jobsystem_conf["port"]
         )
 
-        for module in jobsystem_conf["import_modules"].split(','):
-            self.logger.info("    importing module: %s" % module)
-            importlib.import_module(module, package=None)
+        if luigi_conf["modules"] == '':
+            self.logger.info("    no modules to import!" % module)
+        else:
+            for module in luigi_conf["modules"].split(','):
+                self.logger.info("    importing module: %s" % module)
+                importlib.import_module(module, package=None)
+
+        self.luigi_conf = luigi_conf
 
         self.logger.info("lgrunnerd: initialized")
         self.logger.info("----------------------")
@@ -227,7 +243,7 @@ class WorkflowRunner(object):
 
                     start_time = time.time()
 
-                    # setup luigi parameters
+                    # setup luigi configurations
                     config = luigi.configuration.get_config()
                     config.set(
                         'GlobalTrackingParams', 'tracking_url',
@@ -237,6 +253,21 @@ class WorkflowRunner(object):
                         'GlobalTrackingParams', 'tracking_id',
                         str(job["id"])
                     )
+                    
+                    # setup luigi resources
+                    if 'memory_limit' not in self.luigi_conf:
+                        # use all available memory (in MB)
+                        config.set(
+                            'resources', 'memory',
+                            str(
+                                psutil.virtual_memory().available / 1024 / 1024
+                            )
+                        )
+                    else:
+                        config.set(
+                            'resources', 'memory',
+                            self.luigi_conf['memory_limit']
+                        )
 
                     workflow_name = '%s.%s' % (
                         job["namespace"],
@@ -357,7 +388,8 @@ class WorkflowRunner(object):
 
 def main(config):
     workflow_runner = WorkflowRunner(
-        config['lgrunnerd'], config['luigid'], config['jobsystem']
+        config['lgrunnerd'], config['luigid'],
+        config['jobsystem'], config['luigi'],
     )
     signal.signal(signal.SIGINT, workflow_runner.stop)
     signal.signal(signal.SIGTERM, workflow_runner.stop)
