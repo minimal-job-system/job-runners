@@ -4,6 +4,7 @@ import daemon
 from daemon import pidfile
 
 import configparser
+from contextlib import contextmanager
 # import dateutil
 import datetime
 import functools
@@ -189,26 +190,59 @@ def on_status_notification(task, message, tracking_url, job_id):
     job["status"] = message
     update_remote_job(tracking_url, job)
 
+    # forward message to the luigi scheduler
+    task.set_status_message(message)
 
-def on_progress_notification(task, notif_type, progress, tracking_url, job_id):
+
+def on_progress_notification(task, notif_type, value, tracking_url, job_id):
     """
     Luigi callback function for progress notifications.
     :param task: the task which sends the notification
     :param notif_type: the type of the notification
-    :param progress: the progress to update
+    :param value: the task's progress or fraction to update
     :param tracking_url: url to the tracking system
     :param job_id: ID of the remote job to send the notification to
     :returns: None, raises an HTTPError otherwise
     """
     job = fetch_remote_job(tracking_url, job_id)
 
+    shared_meta_data = task.__class__.shared_meta_data
+
     if job["status"] == "in progress":
-        if notif_type == "set_progress":
-            job["progress"] = progress
-        if notif_type == "add_progress":
-            job["progress"] += progress
-        if notif_type == "sub_progress":
-            job["progress"] -= progress
+        task_meta_data = shared_meta_data.setdefault(task.task_id, {})
+        if notif_type == "set_fraction":
+            task_meta_data['progress_fraction'] = value
+        if notif_type == "set_percentage":
+            task_meta_data['progress_percentage'] = value
+
+            # forward message to the luigi scheduler
+            task.set_progress_percentage(value)
+
+        # update shared object
+        # @see https://docs.python.org/2/library/multiprocessing.html#managers
+        # modifications to mutable values or items in dict and list
+        # proxies will NOT be propagated through the manager.
+        # to modify such an item, you can re-assign the modified object to the
+        # container proxy
+        shared_meta_data[task.task_id] = task_meta_data
+
+        total_fraction = sum(
+            [
+                task['progress_fraction']
+                for task_id, task in shared_meta_data.items()
+                if task_id.startswith('gliberal.Parallel')  # our work packages
+            ]
+        )
+        if total_fraction == 0:
+            total_progress = 0.0
+        else:
+            total_progress = sum([
+                (
+                    task.get('progress_fraction', 0.0) / total_fraction
+                ) * task.get('progress_percentage', 0.0)
+                for task_id, task in shared_meta_data.items()
+            ])
+        job["progress"] = total_progress
 
     update_remote_job(tracking_url, job)
 
@@ -573,6 +607,7 @@ class LuigiProcess(multiprocessing.Process):
         self.status = Status(PENDING)
         self.execution_time = IntValue(-1)
 
+    @contextmanager
     def configure(self):
         # NOTE: configurations set by the parent process are also visible after
         # forking, e.g. signal handling or logger configurations.
@@ -595,6 +630,18 @@ class LuigiProcess(multiprocessing.Process):
             self.config["tracking"]["default-tracking-host"],
             self.config["tracking"]["default-tracking-port"]
         )
+
+        # load modules with luigi workflows and tasks
+        # NOTE: each luigi process loads the modules individualy which
+        # allows e.g. the usage of shared data structures or random initialized
+        # class attributes. if we would load the modules e.g. within the
+        # ServiceRunner we would shared the same data structures and class
+        # attributes among all workflow executions (!)
+        if self.config["lgrunnerd"]["modules"] == '':
+            pass  # no modules to import
+        else:
+            for module in self.config["lgrunnerd"]["modules"].split(','):
+                importlib.import_module(module, package=None)
 
         # register event handlers
         # NOTE: all handlers are registered on the luigi.Task class
@@ -632,164 +679,168 @@ class LuigiProcess(multiprocessing.Process):
             )
         )
 
+        yield
+
+        # cleanup
+        pass
+
     def run(self):
         self.status.set(RUNNING)
 
         # not to affect configurations from the parent process, we ran
         # LuigiProcess.configure() after the process was forked
-        self.configure()
+        with self.configure():
+            tracking_url = "http://%s:%s" % (
+                self.config["tracking"]["default-tracking-host"],
+                self.config["tracking"]["default-tracking-port"]
+            )
 
-        tracking_url = "http://%s:%s" % (
-            self.config["tracking"]["default-tracking-host"],
-            self.config["tracking"]["default-tracking-port"]
-        )
-
-        try:
-            # update job status
             try:
-                self.job["status"] = "in progress"
-                self.job["progress"] = 0
-                update_remote_job(
-                    tracking_url, self.job,
-                    headers={'If-Match': self.job.get('etag', None)}
-                )
-            except Exception as ex:
-                if ex.response.status_code == 412:
-                    self.logger.info(
-                        (
-                            "Job '%s' at '%s' was already modified by another "
-                            "process!\nSkip execution."
-                        ) % (
-                            self.job["id"], ex.request.url
+                # update job status
+                try:
+                    self.job["status"] = "in progress"
+                    self.job["progress"] = 0
+                    update_remote_job(
+                        tracking_url, self.job,
+                        headers={'If-Match': self.job.get('etag', None)}
+                    )
+                except Exception as ex:
+                    if ex.response.status_code == 412:
+                        self.logger.info(
+                            (
+                                "Job '%s' at '%s' was already modified by another "
+                                "process!\nSkip execution."
+                            ) % (
+                                self.job["id"], ex.request.url
+                            )
                         )
-                    )
-                    self.status.set(DONE)
-                    sys.exit(0)
-                else:
-                    self.status.set(FAILED)
-                    raise
-            
-            workflow_name = '%s.%s' % (
-                self.job["namespace"],
-                self.job["name"]
-            )
-            workflow_params = {}
-            for param in self.job["parameters"]:
-                if param["type"] == 0:  # integer
-                    workflow_params[param["name"]] = int(param["value"])
-                if param["type"] == 1:  # float
-                    workflow_params[param["name"]] = float(param["value"])
-                if param["type"] == 2:  # string
-                    workflow_params[param["name"]] = param["value"]
-                if param["type"] == 3:  # boolean
-                    workflow_params[param["name"]] = (
-                        param["value"].lower() == "true"
-                    )
-                if param["type"] == 4:  # datetime
-                    workflow_params[param["name"]] = param["value"]
-
-            self.logger.info(
-                "submit workflow '%s'." % workflow_name
-            )
-            self.logger.info("    parameters: %s" % workflow_params)
-
-            workflow_class = luigi.task_register.Register.get_task_cls(
-                workflow_name
-            )
-
-            start_time = time.time()
-
-            try:
-                workflow_process = WorkflowProcess(
-                    self.scheduler, self.worker_id, self.worker, self.config,
-                    [workflow_class(**workflow_params)]
+                        self.status.set(DONE)
+                        sys.exit(0)
+                    else:
+                        self.status.set(FAILED)
+                        raise
+                
+                workflow_name = '%s.%s' % (
+                    self.job["namespace"],
+                    self.job["name"]
                 )
-                self.logger.info('done scheduling tasks!')
-            except Exception as ex:
-                self.logger.error(ex, exc_info=True)
+                workflow_params = {}
+                for param in self.job["parameters"]:
+                    if param["type"] == 0:  # integer
+                        workflow_params[param["name"]] = int(param["value"])
+                    if param["type"] == 1:  # float
+                        workflow_params[param["name"]] = float(param["value"])
+                    if param["type"] == 2:  # string
+                        workflow_params[param["name"]] = param["value"]
+                    if param["type"] == 3:  # boolean
+                        workflow_params[param["name"]] = (
+                            param["value"].lower() == "true"
+                        )
+                    if param["type"] == 4:  # datetime
+                        workflow_params[param["name"]] = param["value"]
+
+                self.logger.info(
+                    "submit workflow '%s'." % workflow_name
+                )
+                self.logger.info("    parameters: %s" % workflow_params)
+
+                workflow_class = luigi.task_register.Register.get_task_cls(
+                    workflow_name
+                )
+
+                start_time = time.time()
+
+                try:
+                    workflow_process = WorkflowProcess(
+                        self.scheduler, self.worker_id, self.worker, self.config,
+                        [workflow_class(**workflow_params)]
+                    )
+                    self.logger.info('done scheduling tasks!')
+                except Exception as ex:
+                    self.logger.error(ex, exc_info=True)
+                    self.status.set(FAILED)
+                    sys.exit(-1)
+
+                workflow_process.start()
+                time.sleep(1)  # wait until all tasks are submitted
+
+                # monitor the workflow process
+                while workflow_process.exitcode is None:
+                    if self.status.get() == RUNNING:
+                        # check for stop criteria
+                        if self.error_counter.value > 100:
+                            self.stop()
+
+                        if (
+                            fetch_remote_job(
+                                tracking_url, self.job['id']
+                            )['status'] == 'stopping'
+                        ):
+                            self.stop()
+
+                        time.sleep(1)
+
+                    if self.status.get() == SUSPENDED:
+                        workflow_process.stop()
+                        # wait for termination of all luigi tasks
+                        workflow_process.join()
+
+                end_time = time.time()
+                self.execution_time.set(int(end_time - start_time))
+
+                # update job status
+                status = (
+                    "completed" if workflow_process.exitcode == 0 else "failed"
+                )
+                if (
+                    self.error_counter.value > 0 or self.warning_counter.value > 0
+                ):
+                    status += " [%s]" % (','.join([
+                        "%s=%s" % (event, occurrences)
+                        for event, occurrences in (
+                            ("Errors", self.error_counter.value),
+                            ("Warnings", self.warning_counter.value)
+                        )
+                        if occurrences > 0
+                    ]))
+
+                self.job["status"] = status
+                self.job["progress"] = 100
+                # job["duration"] = end_time - start_time
+                # job["exit_code"] = exit_code
+                update_remote_job(
+                    tracking_url, self.job
+                )
+                
+                self.status.set(DONE if workflow_process.exitcode == 0 else FAILED)
+                sys.exit(workflow_process.exitcode)
+
+            except BaseException as ex:
+                if isinstance(ex, SystemExit):
+                    raise  # ignore exception raised by sys.exit()
+                if isinstance(ex, requests.exceptions.RequestException):
+                    if isinstance(ex, requests.exceptions.ConnectionError):
+                        self.logger.error(
+                            "Could not connect to url '%s'!" % ex.request.url
+                        )
+                    elif isinstance(ex, requests.exceptions.HTTPError):
+                        self.logger.error(
+                            "Unexpected response for url '%s': [%s] %s!" % (
+                                ex.request.url, ex.response.status_code,
+                                ex.response.reason
+                            )
+                        )
+                    else:
+                        self.logger.error(
+                            "Unexpected error while calling url '%s'!" % (
+                                ex.request.url
+                            )
+                        )
+                else:
+                    self.logger.error(ex, exc_info=True)
+
                 self.status.set(FAILED)
                 sys.exit(-1)
-
-            workflow_process.start()
-            time.sleep(1)  # wait until all tasks are submitted
-
-            # monitor the workflow process
-            while workflow_process.exitcode is None:
-                if self.status.get() == RUNNING:
-                    # check for stop criteria
-                    if self.error_counter.value > 100:
-                        self.stop()
-
-                    if (
-                        fetch_remote_job(
-                            tracking_url, self.job['id']
-                        )['status'] == 'stopping'
-                    ):
-                        self.stop()
-
-                    time.sleep(1)
-
-                if self.status.get() == SUSPENDED:
-                    workflow_process.stop()
-                    # wait for termination of all luigi tasks
-                    workflow_process.join()
-
-            end_time = time.time()
-            self.execution_time.set(int(end_time - start_time))
-
-            # update job status
-            status = (
-                "completed" if workflow_process.exitcode == 0 else "failed"
-            )
-            if (
-                self.error_counter.value > 0 or self.warning_counter.value > 0
-            ):
-                status += " [%s]" % (','.join([
-                    "%s=%s" % (event, occurrences)
-                    for event, occurrences in (
-                        ("Errors", self.error_counter.value),
-                        ("Warnings", self.warning_counter.value)
-                    )
-                    if occurrences > 0
-                ]))
-
-            self.job["status"] = status
-            self.job["progress"] = 100
-            # job["duration"] = end_time - start_time
-            # job["exit_code"] = exit_code
-            update_remote_job(
-                tracking_url, self.job
-            )
-            
-            self.status.set(DONE if workflow_process.exitcode == 0 else FAILED)
-            sys.exit(workflow_process.exitcode)
-
-        except BaseException as ex:
-            if isinstance(ex, SystemExit):
-                raise  # ignore exception raised by sys.exit()
-            if isinstance(ex, requests.exceptions.RequestException):
-                if isinstance(ex, requests.exceptions.ConnectionError):
-                    self.logger.error(
-                        "Could not connect to url '%s'!" % ex.request.url
-                    )
-                elif isinstance(ex, requests.exceptions.HTTPError):
-                    self.logger.error(
-                        "Unexpected response for url '%s': [%s] %s!" % (
-                            ex.request.url, ex.response.status_code,
-                            ex.response.reason
-                        )
-                    )
-                else:
-                    self.logger.error(
-                        "Unexpected error while calling url '%s'!" % (
-                            ex.request.url
-                        )
-                    )
-            else:
-                self.logger.error(ex, exc_info=True)
-
-            self.status.set(FAILED)
-            sys.exit(-1)
 
     def pause(self, signum=signal.SIGTERM, stack=None):
         raise Exception('Not yet implemented!')
@@ -831,7 +882,7 @@ class ServiceRunner(object):
         self.logger = logging.getLogger('lgrunnerd')
         self.logger.setLevel(logging.INFO)
 
-        self.logger.info("lgrunnerd: initializing")
+        self.logger.info("lgrunnerd: read configurations...")
 
         # set default configurations for resources
         if self.config.getint('resources', 'memory', 0) == 0:
@@ -868,22 +919,14 @@ class ServiceRunner(object):
                 resource, int(self.config['resources'][resource])
             )
 
-        # re-load modules with luigi workflows and tasks
-        if self.config["lgrunnerd"]["modules"] == '':
-            self.logger.info("    no modules to import!")
-        else:
-            for module in self.config["lgrunnerd"]["modules"].split(','):
-                self.logger.info("    importing module: %s" % module)
-                importlib.import_module(module, package=None)
-
         # summarize configurations
-        self.logger.info("lgrunnerd: initialized")
         self.logger.info("----------------------")
         self.logger.info("configurations:")
         for section in self.config.sections():
             self.logger.info("    %s" % section.upper())
             self.logger.info("    %s" % dict(self.config[section]))
         self.logger.info("----------------------")
+        self.logger.info("lgrunnerd: initialization completed!")
 
     def run(self):
         self.status.set(RUNNING)
