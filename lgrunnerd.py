@@ -62,23 +62,35 @@ def retry(attempts=3, non_retry_codes=[]):
 # helper functions
 @retry(3)
 def fetch_remote_jobs(
-    job_system_url, type='Luigi Workflow', status='initialized',
-    days_since_creation=30
+    job_system_url, type='Luigi Workflow', namespace=None,
+    status='initialized', days_since_creation=30
 ):
     """
     Helper funtion to fetch remote jobs.
     :param job_system_url: url to the job system
     :param type: only fetches jobs of this type
+    :param task_namespace: only fetches jobs of this namespace
     :param status: only fetches jobs with this status
     :param days_since_creation: only fetches jobs which creation date is not
         too old
     :returns: a job, raises an HTTPError otherwise
     """
+    type_filter = "&type_name=%s" % type
+    namespace_filter = (
+        "&namespace=%s" % namespace
+    ) if namespace is not None else ''
+    status_filter = "&status=%s" % status
+    days_since_creation_filter = \
+        "&days_since_creation=%s" % days_since_creation
     response = requests.get(
         (
             "%s/api/jobs/?ordering=date_created"
-            "&type_name=%s&status=%s&days_since_creation=%s"
-        ) % (job_system_url, type, status, days_since_creation),
+            "%s%s%s%s"
+        ) % (
+            job_system_url,
+            type_filter, namespace_filter, status_filter,
+            days_since_creation_filter
+        ),
         headers={'content-type': 'application/json'}
     )
     response.raise_for_status()
@@ -967,7 +979,11 @@ class ServiceRunner(object):
             try:
                 # request unprocessed luigi-workflow jobs
                 # TODO: add limitation to ask only one task a time
-                job_queue = fetch_remote_jobs(tracking_url)
+                job_queue = fetch_remote_jobs(
+                    tracking_url,
+                    namespace=self.config["lgrunnerd"]["namespace"] or None
+                    )
+                )
 
                 if len(job_queue) == 0:
                     # nothing to do...
