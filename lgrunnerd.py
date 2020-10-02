@@ -638,9 +638,13 @@ class LuigiProcess(multiprocessing.Process):
         self.logger = logging.getLogger('luigi-interface')
         self.logger.setLevel(logging.INFO)
 
-        tracking_url = "http://%s:%s" % (
+        tracking_port = self.config["tracking"]["default-tracking-port"]
+        if tracking_port != '':
+            tracking_port = ':%s' % tracking_port
+        tracking_url = "%s://%s%s" % (
+            self.config["tracking"]["default-tracking-protocol"],
             self.config["tracking"]["default-tracking-host"],
-            self.config["tracking"]["default-tracking-port"]
+            tracking_port
         )
 
         # load modules with luigi workflows and tasks
@@ -702,9 +706,13 @@ class LuigiProcess(multiprocessing.Process):
         # not to affect configurations from the parent process, we ran
         # LuigiProcess.configure() after the process was forked
         with self.configure():
-            tracking_url = "http://%s:%s" % (
+            tracking_port = self.config["tracking"]["default-tracking-port"]
+            if tracking_port != '':
+                tracking_port = ':%s' % tracking_port
+            tracking_url = "%s://%s%s" % (
+                self.config["tracking"]["default-tracking-protocol"],
                 self.config["tracking"]["default-tracking-host"],
-                self.config["tracking"]["default-tracking-port"]
+                tracking_port
             )
 
             try:
@@ -911,7 +919,10 @@ class ServiceRunner(object):
                 self.worker_scheduler_factory.create_local_scheduler()
             )
         else:
-            scheduler_url = 'http://{host}:{port:d}/'.format(
+            scheduler_url = '{protocol}://{host}:{port:d}/'.format(
+                protocol=self.config.get(
+                    'core', 'default-scheduler-protocol', 'http'
+                ),
                 host=self.config.get(
                     'core', 'default-scheduler-host', 'localhost'
                 ),
@@ -945,9 +956,13 @@ class ServiceRunner(object):
 
         self.configure()
 
-        tracking_url = "http://%s:%s" % (
+        tracking_port = self.config["tracking"]["default-tracking-port"]
+        if tracking_port != '':
+            tracking_port = ':%s' % tracking_port
+        tracking_url = "%s://%s%s" % (
+            self.config["tracking"]["default-tracking-protocol"],
             self.config["tracking"]["default-tracking-host"],
-            self.config["tracking"]["default-tracking-port"]
+            tracking_port
         )
         running_luigi_processes = []
 
