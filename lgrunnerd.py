@@ -997,7 +997,6 @@ class ServiceRunner(object):
                 job_queue = fetch_remote_jobs(
                     tracking_url,
                     namespace=self.config["lgrunnerd"]["namespace"] or None
-                    )
                 )
 
                 if len(job_queue) == 0:
