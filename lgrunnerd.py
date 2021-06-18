@@ -372,11 +372,15 @@ class WorkerSchedulerFactory(object):
         return luigi.rpc.RemoteScheduler(url)
 
     def create_worker(
-        self, scheduler, worker_id=None, worker_processes=1, assistant=False
+        self, scheduler, worker_id=None, worker_processes=1, assistant=False,
+        keep_alive=True,
+        max_keep_alive_idle_duration=datetime.timedelta(hours=12)
     ):
         return luigi.worker.Worker(
             scheduler=scheduler, worker_id=worker_id,
-            worker_processes=worker_processes, assistant=assistant
+            worker_processes=worker_processes, assistant=assistant,
+            keep_alive=keep_alive,
+            max_keep_alive_idle_duration=max_keep_alive_idle_duration
         )
 
 
@@ -607,8 +611,13 @@ class LuigiProcess(multiprocessing.Process):
         self.worker_id = 'worker_%s' % job["id"]
         self.worker = worker_scheduler_factory.create_worker(
             scheduler=scheduler, worker_id=self.worker_id,
-            worker_processes=config.getint("core", "workers"),
-            assistant=config.getboolean("core", "assistant")
+            worker_processes=config.getint("worker", "worker_processes"),
+            assistant=config.getboolean("worker", "assistant"),
+            keep_alive=config.getboolean("worker", "keep_alive"),
+            max_keep_alive_idle_duration= \
+                luigi.parameter.TimeDeltaParameter().parse(
+                    config.get("worker", "max_keep_alive_idle_duration")
+                )
         )
         self.job = job
         self.config = config
